@@ -1,0 +1,75 @@
+{
+  "expo": {
+    "name": "Scana",
+    "slug": "scana-mobile",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.adamaly.scana",
+      "buildNumber": "2.0.0",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scana utilise la caméra pour numériser vos documents.",
+        "NSPhotoLibraryUsageDescription": "Scana nécessite l'accès à votre bibliothèque photos pour importer des images.",
+        "NSPhotoLibraryAddOnlyUsageDescription": "Scana peut enregistrer vos scans dans la galerie.",
+        "NSLocalNetworkUsageDescription": "Scana nécessite l'accès au réseau local pour certaines fonctionnalités (optionnel).",
+        "NSBonjourServiceTypes": ["_scana._tcp", "_scana._udp"],
+        "NSFaceIDUsageDescription": "Scana utilise Face ID pour protéger vos documents sensibles.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.adamaly.scana",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Scana a besoin d'accéder à vos photos.",
+          "cameraPermission": "Scana a besoin d'accéder à votre caméra.",
+          "microphonePermission": "Scana a besoin d'accéder à votre microphone."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scana a besoin d'accéder à votre caméra."
+        }
+      ],
+      [
+        "expo-file-system",
+        {
+          "faceIDPermission": "Scana utilise Face ID pour sécuriser vos documents."
+        }
+      ]
+    ],
+    "experiments": {
+      "tsconfigPaths": true
+    }
+  }
+}
