@@ -1,127 +1,116 @@
-import React, { useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, spacing, typography, radius } from '@/constants/theme';
-import { Icon } from '@/components/ui/Icon';
-import { Modal } from '@/components/ui/Modal';
-import { Input } from '@/components/ui/Input';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { useDocuments } from '@/hooks/useDocuments';
-import { formatBytes, formatRelativeDate } from '@/utils/format';
+import React, { useEffect } from 'react';
+import { View, StyleSheet, FlatList, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Button, Text, Card, Loader } from '@/components/atoms';
+import { useDocuments } from '@/hooks/useDocuments';
+import { colors, spacing } from '@/constants/theme';
 
-type Sort = 'date_desc' | 'title' | 'size';
-
-export default function Files() {
-  const { documents, folders, createFolder, deleteFolder } = useDocuments();
-  const [folderFilter, setFolderFilter] = useState<string | null | undefined>(undefined);
-  const [sort, setSort] = useState<Sort>('date_desc');
-  const [showNewFolder, setShowNewFolder] = useState(false);
-  const [folderName, setFolderName] = useState('');
+export default function FilesScreen() {
   const router = useRouter();
+  const { documents, isLoading, refresh, deleteDocument } = useDocuments();
 
-  const list = [...documents]
-    .filter((d) => folderFilter === undefined || d.folderId === folderFilter)
-    .sort((a, b) =>
-      sort === 'title' ? a.title.localeCompare(b.title)
-      : sort === 'size' ? b.fileSize - a.fileSize
-      : b.updatedAt - a.updatedAt);
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  if (isLoading) {
+    return <Loader />;
+  }
+
+  if (documents.length === 0) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyContainer}>
+          <Text variant="h2" style={styles.emptyTitle}>
+            Aucun document
+          </Text>
+          <Text variant="body" color={colors.neutrals[600]} style={styles.emptySubtitle}>
+            Commencez par numériser un document
+          </Text>
+          <Button
+            label="Nouveau scan"
+            onPress={() => router.push('/scan')}
+            style={styles.button}
+          />
+        </View>
+      </View>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <Text style={[typography.h1, styles.title]}>Fichiers</Text>
-
+    <View style={styles.container}>
       <FlatList
-        horizontal
-        data={folders}
-        keyExtractor={(f) => f.id}
-        style={styles.folders}
-        showsHorizontalScrollIndicator={false}
-        ListHeaderComponent={
-          <Pressable style={[styles.folderChip, folderFilter === undefined && styles.folderChipActive]}
-            onPress={() => setFolderFilter(undefined)}>
-            <Text style={styles.folderChipText}>Tous</Text>
-          </Pressable>
-        }
-        ListFooterComponent={
-          <Pressable style={styles.folderChip} onPress={() => setShowNewFolder(true)}>
-            <Icon name="plus" size={14} color={colors.primary} />
-            <Text style={[styles.folderChipText, { color: colors.primary }]}>Nouveau</Text>
-          </Pressable>
-        }
+        data={documents}
+        keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <Pressable style={[styles.folderChip, folderFilter === item.id && styles.folderChipActive]}
-            onPress={() => setFolderFilter(item.id)}
-            onLongPress={() => deleteFolder(item.id)}
-            accessibilityLabel={`Dossier ${item.name}, ${item.documentCount} documents`}>
-            <Icon name="folder" size={14} color={item.color} />
-            <Text style={styles.folderChipText}>{item.name} ({item.documentCount})</Text>
-          </Pressable>
-        )}
-      />
-
-      <View style={styles.sortRow}>
-        {(['date_desc', 'title', 'size'] as Sort[]).map((s) => (
-          <Pressable key={s} onPress={() => setSort(s)} hitSlop={8}>
-            <Text style={[typography.caption, styles.sortText, sort === s && { color: colors.primary }]}>
-              {s === 'date_desc' ? 'Récents' : s === 'title' ? 'Nom' : 'Taille'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <FlatList
-        data={list}
-        keyExtractor={(d) => d.id}
-        contentContainerStyle={{ padding: spacing.lg, flexGrow: 1 }}
-        renderItem={({ item }) => (
-          <Pressable style={styles.row} onPress={() => router.push(`/document/${item.id}`)}
-            accessibilityLabel={item.title}>
-            <View style={{ flex: 1 }}>
-              <Text style={[typography.body, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
-              <Text style={[typography.caption, { color: colors.textSecondary }]}>
-                {item.pageCount} p. · {formatBytes(item.fileSize)} · {formatRelativeDate(item.updatedAt)}
-                {item.tags.length ? ` · ${item.tags.join(', ')}` : ''}
-              </Text>
+          <Card
+            style={styles.documentCard}
+            onPress={() => router.push(`/document/${item.id}`)}
+          >
+            <View style={styles.documentContent}>
+              <View style={styles.documentInfo}>
+                <Text variant="h3" numberOfLines={1}>
+                  {item.title}
+                </Text>
+                <Text
+                  variant="caption"
+                  color={colors.neutrals[500]}
+                  numberOfLines={1}
+                >
+                  {item.pageCount} page{item.pageCount > 1 ? 's' : ''} •{' '}
+                  {new Date(item.modifiedAt).toLocaleDateString()}
+                </Text>
+              </View>
+              <Button
+                label="Supprimer"
+                variant="ghost"
+                size="sm"
+                onPress={() => deleteDocument(item.id)}
+              />
             </View>
-            <Icon name="chevronRight" size={18} color={colors.textTertiary} />
-          </Pressable>
+          </Card>
         )}
-        ListEmptyComponent={
-          <EmptyState icon="folder" title="Aucun fichier"
-            message="Les documents que vous scannez apparaissent ici." />
-        }
+        contentContainerStyle={styles.listContent}
       />
-
-      <Modal visible={showNewFolder} title="Nouveau dossier"
-        onClose={() => setShowNewFolder(false)} confirmLabel="Créer"
-        onConfirm={() => {
-          if (folderName.trim()) createFolder(folderName.trim());
-          setFolderName(''); setShowNewFolder(false);
-        }}>
-        <Input label="Nom du dossier" value={folderName} onChangeText={setFolderName}
-          placeholder="Ex : Factures" autoFocus />
-      </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  title: { color: colors.text, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  folders: { flexGrow: 0, paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
-  folderChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: colors.background, borderRadius: radius.full,
-    paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginRight: spacing.sm,
+  container: {
+    flex: 1,
+    backgroundColor: colors.neutrals[50],
   },
-  folderChipActive: { backgroundColor: colors.primarySoft },
-  folderChipText: { ...typography.bodySmall, color: colors.text },
-  sortRow: { flexDirection: 'row', gap: spacing.lg, paddingHorizontal: spacing.lg },
-  sortText: { color: colors.textTertiary },
-  row: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: colors.background, borderRadius: radius.md,
-    padding: spacing.md, marginBottom: spacing.sm,
+  listContent: {
+    padding: spacing.lg,
+  },
+  documentCard: {
+    marginBottom: spacing.md,
+  },
+  documentContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  documentInfo: {
+    flex: 1,
+    marginRight: spacing.md,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  emptyTitle: {
+    marginBottom: spacing.sm,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    marginBottom: spacing.xl,
+    textAlign: 'center',
+  },
+  button: {
+    marginTop: spacing.md,
   },
 });
