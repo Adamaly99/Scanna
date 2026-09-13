@@ -1,176 +1,207 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
+import React, { useEffect } from 'react';
+import {
+  View,
+  StyleSheet,
+  ScrollView,
+  FlatList,
+  Image,
+  TouchableOpacity,
+  Dimensions,
+} from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
-import { colors, spacing, typography, radius } from '@/constants/theme';
-import { Icon } from '@/components/ui/Icon';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Modal } from '@/components/ui/Modal';
-import { ReviewStrip } from '@/components/scanner/ReviewStrip';
-import { QuadEditor } from '@/components/scanner/QuadEditor';
-import { useScanStore, scanPageToRecord } from '@/stores/scanStore';
-import { useDocumentsStore } from '@/stores/documentsStore';
-import { useToast } from '@/components/ui/Toast';
-import { warpPerspective } from '@/image-processing/skiaWarp';
-import { normalizedToPixelQuad } from '@/scanner/quadDetection';
-import { applyFilter } from '@/image-processing/filters';
-import * as fileStorage from '@/storage/fileStorage';
-import { Dimensions } from 'react-native';
+import { Text, Button, Card } from '@/components/atoms';
+import { useScanner } from '@/hooks/useScanner';
+import { useDocuments } from '@/hooks/useDocuments';
+import { colors, spacing } from '@/constants/theme';
+import { logger } from '@/services/logger';
 
 const { width } = Dimensions.get('window');
+const THUMBNAIL_SIZE = (width - spacing.lg * 3) / 2;
 
 export default function ReviewScreen() {
-  const { pages, activeIndex, setActiveIndex, removePage, movePage, updatePage, reset } = useScanStore();
-  const createDocument = useDocumentsStore((s) => s.createDocument);
-  const [saving, setSaving] = useState(false);
-  const [saveModal, setSaveModal] = useState(false);
-  const [title, setTitle] = useState(`Scan ${new Date().toLocaleDateString('fr-FR')}`);
-  const [editingQuad, setEditingQuad] = useState(false);
   const router = useRouter();
-  const toast = useToast();
+  const { pages, currentPageIndex, setCurrentPageIndex, retakeCurrentPage, completeScan } =
+    useScanner();
+  const { createDocument } = useDocuments();
+  const [selectedIndex, setSelectedIndex] = React.useState(0);
 
-  const page = pages[activeIndex];
-
-  const save = async () => {
-    if (pages.length === 0) return;
-    setSaving(true);
-    try {
-      const doc = createDocument({
-        title: title.trim() || 'Document',
-        folderId: null,
-        tags: [],
-        source: 'camera',
-        pages: pages.map((p, i) => scanPageToRecord(p, 'pending-doc-id', i)),
-      });
-      // Corrige le documentId injecté à la création (le repository a généré un id propre)
-      const realDoc = useDocumentsStore.getState().documents.find(
-        (d) => d.title === (title.trim() || 'Document'),
-      );
-      const target = realDoc ?? doc;
-
-      // Traitement par page : warp perspective si quad, puis filtre
-      for (const [i, p] of pages.entries()) {
-        const record = scanPageToRecord(p, target.id, i);
-        let working = p.tempUri;
-        if (p.quad) {
-          const quadPx = normalizedToPixelQuad(p.quad, p.width, p.height || Math.round(p.width * 1.4));
-          const out = fileStorage.processedImagePath(target.id, p.id);
-          const warped = await warpPerspective({
-            sourceUri: p.tempUri, quad: quadPx,
-            outWidth: 1240, outHeight: 1754, quality: 0.85, outPath: out,
-          });
-          if (warped.ok) working = warped.value.uri;
-        }
-        const filtered = await applyFilter({
-          sourceUri: working, filter: p.filter, adjustments: p.adjustments,
-          quality: 0.85,
-          outPath: fileStorage.processedImagePath(target.id, p.id),
-        });
-        record.imagePath = p.tempUri;
-        record.processedPath = filtered.ok ? filtered.value.uri : working;
-        const { documentRepository } = await import('@/database/documentRepository');
-        documentRepository.addPage(target.id, record);
-        // Réécriture du chemin image correct dans le record persisté
-        const persisted = documentRepository.getPage(record.id);
-        if (persisted) {
-          persisted.imagePath = p.tempUri.replace('/temp/', `/${target.id}/`);
-          const moved = await fileStorage.copyInto(p.tempUri, persisted.imagePath);
-          if (moved.ok) { await fileStorage.deleteFile(p.tempUri); }
-          documentRepository.updatePage(persisted);
-        }
-      }
-      reset();
-      setSaveModal(false);
-      toast('Document enregistré', 'success');
-      router.replace(`/document/${target.id}`);
-    } catch (e) {
-      Alert.alert('Erreur', 'Enregistrement impossible. Vos pages sont conservées.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!page) {
+  if (pages.length === 0) {
     return (
-      <SafeAreaView style={styles.container}>
-        <Text style={[typography.body, { color: colors.textSecondary }]}>Aucune page.</Text>
-        <Button label="Retour à la caméra" onPress={() => router.replace('/scan')} />
-      </SafeAreaView>
+      <View style={styles.container}>
+        <Text variant="h2">Aucun document</Text>
+        <Button
+          label="Retour"
+          onPress={() => router.back()}
+        />
+      </View>
     );
   }
 
+  const currentPage = pages[selectedIndex] || pages[0];
+
+  const handleSave = async () => {
+    try {
+      logger.startTimer('save_document');
+
+      const scanPages = await completeScan();
+
+      const newDocument = await createDocument({
+        title: `Document ${new Date().toLocaleDateString()}`,
+        localPath: scanPages[0]?.imageUri || '',
+        pageCount: scanPages.length,
+        totalSize: 0,
+        tags: [],
+        ocrStatus: 'pending',
+        folderId: null,
+        pages: scanPages,
+      });
+
+      logger.endTimer('save_document');
+      logger.info('Document saved', { id: newDocument.id });
+
+      router.replace('/files');
+    } catch (error) {
+      logger.error('Failed to save document', error);
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Retour">
-          <Icon name="arrowLeft" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[typography.h3, { color: colors.text }]}>Réviser le scan</Text>
-        <Pressable onPress={() => setEditingQuad((v) => !v)} hitSlop={12}
-          accessibilityLabel="Ajuster les coins du document">
-          <Icon name="crop" size={22} color={editingQuad ? colors.primary : colors.text} />
-        </Pressable>
+    <View style={styles.container}>
+      {/* Current Page Preview */}
+      <View style={styles.previewContainer}>
+        <Image
+          source={{ uri: currentPage.imageUri }}
+          style={styles.previewImage}
+        />
       </View>
 
-      <View style={styles.preview}>
-        <Image source={{ uri: page.tempUri }} style={{ width: width - spacing.xl * 2, height: (width - spacing.xl * 2) * 1.35 }}
-          contentFit="contain" recyclingKey={page.id} />
-        {editingQuad && page.quad ? (
-          <QuadEditor quad={page.quad} width={width - spacing.xl * 2}
-            height={(width - spacing.xl * 2) * 1.35}
-            onChange={(q) => updatePage(page.id, { quad: q })} />
-        ) : null}
+      {/* Page Counter */}
+      <View style={styles.pageInfo}>
+        <Text variant="body">
+          Page {selectedIndex + 1} de {pages.length}
+        </Text>
       </View>
 
-      <View style={styles.filtersRow}>
-        {(['original', 'document', 'grayscale', 'blackwhite'] as const).map((f) => (
-          <Pressable key={f} onPress={() => updatePage(page.id, { filter: f })}
-            style={[styles.filterChip, page.filter === f && styles.filterChipActive]}
-            accessibilityLabel={`Filtre ${f}`} accessibilityState={{ selected: page.filter === f }}>
-            <Text style={[typography.caption, { color: page.filter === f ? '#FFF' : colors.text }]}>
-              {{ original: 'Couleur', document: 'Document', grayscale: 'Gris', blackwhite: 'N&B' }[f]}
-            </Text>
-          </Pressable>
-        ))}
+      {/* Thumbnails */}
+      <FlatList
+        data={pages}
+        keyExtractor={(_, index) => index.toString()}
+        renderItem={({ item, index }) => (
+          <TouchableOpacity
+            style={[
+              styles.thumbnail,
+              selectedIndex === index && styles.thumbnailSelected,
+            ]}
+            onPress={() => setSelectedIndex(index)}
+          >
+            <Image
+              source={{ uri: item.imageUri }}
+              style={styles.thumbnailImage}
+            />
+            <View style={styles.thumbnailLabel}>
+              <Text
+                style={[
+                  styles.thumbnailLabelText,
+                  selectedIndex === index && styles.thumbnailLabelTextSelected,
+                ]}
+              >
+                {index + 1}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        )}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.thumbnailsList}
+      />
+
+      {/* Actions */}
+      <View style={styles.actions}>
+        <Button
+          label="Retour caméra"
+          variant="outlined"
+          onPress={() => router.back()}
+        />
+        <Button
+          label="Supprimer"
+          variant="ghost"
+          onPress={retakeCurrentPage}
+        />
+        <Button
+          label="Enregistrer"
+          onPress={handleSave}
+        />
       </View>
-
-      <ReviewStrip pages={pages} activeIndex={activeIndex} onSelect={setActiveIndex}
-        onRemove={removePage} onMove={movePage} />
-
-      <View style={styles.footer}>
-        <Button label="Ajouter une page" variant="secondary" icon="plus"
-          onPress={() => router.push('/scan')} />
-        <Button label={`Enregistrer (${pages.length})`} onPress={() => setSaveModal(true)}
-          loading={saving} />
-      </View>
-
-      <Modal visible={saveModal} title="Enregistrer le document"
-        onClose={() => setSaveModal(false)} confirmLabel="Enregistrer"
-        onConfirm={() => void save()}>
-        <Input label="Titre" value={title} onChangeText={setTitle} autoFocus
-          accessibilityLabel="Titre du document" />
-      </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.darkBackground, gap: spacing.md },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  container: {
+    flex: 1,
+    backgroundColor: colors.neutrals[50],
+  },
+  previewContainer: {
+    flex: 1,
+    backgroundColor: colors.black,
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: spacing.md,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  pageInfo: {
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
   },
-  preview: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  filtersRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
-  filterChip: {
-    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
-    borderRadius: radius.full, backgroundColor: colors.darkSurface,
-  },
-  filterChipActive: { backgroundColor: colors.primary },
-  footer: {
-    flexDirection: 'row', gap: spacing.md, paddingHorizontal: spacing.lg,
+  thumbnailsList: {
+    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
+  },
+  thumbnail: {
+    marginRight: spacing.md,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  thumbnailSelected: {
+    borderColor: colors.primary,
+  },
+  thumbnailImage: {
+    width: THUMBNAIL_SIZE,
+    height: THUMBNAIL_SIZE,
+    resizeMode: 'cover',
+  },
+  thumbnailLabel: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  thumbnailLabelText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  thumbnailLabelTextSelected: {
+    color: colors.white,
+  },
+  actions: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    gap: spacing.md,
   },
 });
