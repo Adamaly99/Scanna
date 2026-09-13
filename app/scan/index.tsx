@@ -1,178 +1,245 @@
-import React, { useRef, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Dimensions, Alert } from 'react-native';
-import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
-import { colors, spacing, typography } from '@/constants/theme';
-import { Icon } from '@/components/ui/Icon';
-import { ScannerOverlay } from '@/components/scanner/ScannerOverlay';
-import { detectOnPhoto, AutoCaptureController } from '@/scanner/scannerService';
-import { useScanStore } from '@/stores/scanStore';
-import * as fileStorage from '@/storage/fileStorage';
-import { hasFreeSpace } from '@/storage/fileStorage';
-import { useToast } from '@/components/ui/Toast';
-import { logger } from '@/utils/logger';
-import * as ImageManipulator from 'expo-image-manipulator';
-import * as ImagePicker from 'expo-image-picker';
+import React, { useRef, useEffect, useState } from 'react';
+import { View, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Camera } from 'expo-camera';
+import { Text, Button } from '@/components/atoms';
+import { useCamera } from '@/hooks/useCamera';
+import { useScanner } from '@/hooks/useScanner';
+import { colors, spacing } from '@/constants/theme';
+import { logger } from '@/services/logger';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 export default function ScanScreen() {
-  const cameraRef = useRef<CameraView>(null);
-  const [permission, requestPermission] = useCameraPermissions();
-  const [, requestMic] = useMicrophonePermissions();
-  const [flash, setFlash] = useState(false);
-  const [detected, setDetected] = useState<{ quad: any; locked: boolean }>({ quad: null, locked: false });
-  const [capturing, setCapturing] = useState(false);
-  const autoCapture = useRef(new AutoCaptureController());
   const router = useRouter();
-  const toast = useToast();
-  const { addPage, pages } = useScanStore();
-  const params = useLocalSearchParams<{ importUri?: string }>();
+  const cameraRef = useRef<Camera>(null);
+  const { hasPermission, requestPermission, cameraType, toggleCameraType, flashMode, toggleFlash } =
+    useCamera({ autoRequest: true });
+  const { captureFrame, cancelScan, pageCount, isAutoCaptureEnabled, setIsAutoCaptureEnabled } =
+    useScanner();
+  const [isCameraReady, setIsCameraReady] = useState(false);
 
-  React.useEffect(() => {
-    void requestMic(); // requis par expo-camera sur iOS même sans audio
-    if (params.importUri) void handleImport(params.importUri);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
+    }
   }, []);
 
-  const handleImport = async (uri: string) => {
-    const ok = await processCapturedImage(uri);
-    if (ok) router.push('/scan/review');
-  };
-
-  const processCapturedImage = useCallback(async (uri: string): Promise<boolean> => {
-    if (!(await hasFreeSpace(5 * 1024 * 1024))) {
-      Alert.alert('Stockage insuffisant', 'Libérez de l’espace pour numériser.');
-      return false;
-    }
-    setCapturing(true);
-    try {
-      // Compression et normalisation orientation native
-      const ctx = ImageManipulator.manipulate(uri);
-      const img = await ctx.resize({ width: 1600 }).renderAsync();
-      const b64 = await img.base64();
-      if (!b64) throw new Error('base64 indisponible');
-      const tempPath = `${fileStorage.documentDir('temp').uri}${Date.now()}.jpg`;
-      const written = await fileStorage.writeBase64(tempPath, b64);
-      if (!written.ok) throw written.error;
-
-      // Détection réelle sur la photo capturée
-      const det = await detectOnPhoto({ uri: tempPath, width: 1600, height: 0 });
-      addPage({
-        tempUri: written.value.uri,
-        width: 1600,
-        height: 0,
-        quad: det.quad,
-        filter: 'document',
-        adjustments: { brightness: 0, contrast: 0, rotation: 0 },
-        fileSize: written.value.size,
-      });
-      return true;
-    } catch (e) {
-      logger.error('Scan', 'Capture échouée', e);
-      toast('Capture impossible. Réessayez.', 'error');
-      return false;
-    } finally {
-      setCapturing(false);
-    }
-  }, [addPage, toast]);
-
-  const capture = useCallback(async () => {
-    const photo = await cameraRef.current?.takePictureAsync({ quality: 0.9, skipProcessing: false });
-    if (!photo) { toast('Caméra non prête', 'error'); return; }
-    const ok = await processCapturedImage(photo.uri);
-    autoCapture.current.reset();
-    if (ok) router.push('/scan/review');
-  }, [processCapturedImage, router, toast]);
-
-  const onAnalyze = useCallback(async () => {
-    // Analyse périodique : photo basse résolution pour le feedback temps réel
-    if (capturing) return;
-    try {
-      const preview = await cameraRef.current?.takePictureAsync({ quality: 0.1 });
-      if (!preview) return;
-      const det = await detectOnPhoto(preview);
-      setDetected({ quad: det.quad, locked: det.locked });
-      if (useScanStore.getState().autoCapture && autoCapture.current.update(det.score)) {
-        await capture();
-      }
-    } catch { /* frame ratée : on continue silencieusement */ }
-  }, [capture, capturing]);
-
-  React.useEffect(() => {
-    const t = setInterval(() => void onAnalyze(), 500);
-    return () => clearInterval(t);
-  }, [onAnalyze]);
-
-  if (!permission) return <View style={styles.bg} />;
-  if (!permission.granted) {
+  if (!hasPermission) {
     return (
-      <SafeAreaView style={styles.perm}>
-        <Text style={[typography.h2, { color: colors.text }]}>Caméra requise</Text>
-        <Text style={[typography.body, { color: colors.textSecondary, textAlign: 'center' }]}>
-          Scana a besoin de la caméra pour numériser vos documents.
+      <View style={styles.container}>
+        <Text variant="h2" style={styles.title}>
+          Autorisation caméra requise
         </Text>
-        <Pressable onPress={() => void requestPermission()} style={styles.permBtn}
-          accessibilityRole="button" accessibilityLabel="Autoriser la caméra">
-          <Text style={{ color: '#FFF', ...typography.button }}>Autoriser</Text>
-        </Pressable>
-      </SafeAreaView>
+        <Button
+          label="Accorder l'accès"
+          onPress={requestPermission}
+          style={styles.button}
+        />
+      </View>
     );
   }
 
+  const handleCapture = async () => {
+    try {
+      if (!cameraRef.current || !isCameraReady) return;
+
+      logger.startTimer('capture_photo');
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 1,
+        base64: false,
+      });
+
+      // Placeholder for detection - will be implemented in Phase 3
+      await captureFrame(photo.uri, null);
+
+      logger.endTimer('capture_photo');
+      logger.info('Photo captured', { uri: photo.uri });
+    } catch (error) {
+      logger.error('Failed to capture photo', error);
+    }
+  };
+
   return (
-    <View style={styles.bg}>
-      <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back"
-        flash={flash ? 'on' : 'off'} mode="picture" />
-      <ScannerOverlay quad={detected.quad} locked={detected.locked} width={width} height={height} />
+    <View style={styles.container}>
+      <Camera
+        ref={cameraRef}
+        style={styles.camera}
+        type={cameraType}
+        flashMode={flashMode}
+        onCameraReady={() => setIsCameraReady(true)}
+      >
+        {/* Top Controls */}
+        <View style={styles.topControls}>
+          <TouchableOpacity
+            style={styles.controlButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.controlText}>✕</Text>
+          </TouchableOpacity>
 
-      <SafeAreaView style={styles.topBar} edges={['top']}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Fermer le scanner">
-          <Icon name="close" size={26} color="#FFF" />
-        </Pressable>
-        <Text style={[typography.body, { color: '#FFF' }]}>{pages.length} page{pages.length > 1 ? 's' : ''}</Text>
-        <Pressable onPress={() => setFlash((f) => !f)} hitSlop={12}
-          accessibilityLabel={flash ? 'Désactiver le flash' : 'Activer le flash'}>
-          <Icon name={flash ? 'flash' : 'flashOff'} size={24} color="#FFF" />
-        </Pressable>
-      </SafeAreaView>
+          <TouchableOpacity
+            style={styles.controlButton}
+            onPress={toggleFlash}
+          >
+            <Text style={styles.controlText}>
+              {flashMode === 'on' ? '🔦' : '💡'}
+            </Text>
+          </TouchableOpacity>
 
-      <View style={styles.bottomBar}>
-        <Pressable style={styles.captureBtn} onPress={() => void capture()}
-          accessibilityRole="button" accessibilityLabel="Capturer" disabled={capturing}>
-          <Animated.View style={[styles.captureInner, captureAnim(capturing)]} />
-        </Pressable>
+          <TouchableOpacity
+            style={styles.controlButton}
+            onPress={toggleCameraType}
+          >
+            <Text style={styles.controlText}>🔄</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Page Counter */}
+        {pageCount > 0 && (
+          <View style={styles.pageCounter}>
+            <Text style={styles.pageCounterText}>
+              {pageCount} page{pageCount > 1 ? 's' : ''}
+            </Text>
+          </View>
+        )}
+      </Camera>
+
+      {/* Bottom Controls */}
+      <View style={styles.bottomControls}>
+        <TouchableOpacity
+          style={[
+            styles.autoButton,
+            isAutoCaptureEnabled && styles.autoButtonActive,
+          ]}
+          onPress={() => setIsAutoCaptureEnabled(!isAutoCaptureEnabled)}
+        >
+          <Text
+            style={[
+              styles.autoButtonText,
+              isAutoCaptureEnabled && styles.autoButtonTextActive,
+            ]}
+          >
+            Auto
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.captureButton}
+          onPress={handleCapture}
+        >
+          <View style={styles.captureButtonInner} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.reviewButton}
+          onPress={() => {
+            if (pageCount > 0) {
+              router.push('/scan/review');
+            }
+          }}
+          disabled={pageCount === 0}
+        >
+          <Text style={styles.reviewButtonText}>
+            Voir ({pageCount})
+          </Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-function captureAnim(active: boolean) {
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const style = useAnimatedStyle(() => ({
-    transform: [{ scale: withTiming(active ? 0.8 : 1, { duration: 120 }) }],
-  }));
-  return style;
-}
-
 const styles = StyleSheet.create({
-  bg: { flex: 1, backgroundColor: colors.scannerBg },
-  perm: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
-  permBtn: { backgroundColor: colors.primary, paddingHorizontal: spacing.xl, paddingVertical: spacing.md, borderRadius: 12 },
-  topBar: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: spacing.lg, paddingTop: spacing.sm,
+  container: {
+    flex: 1,
+    backgroundColor: colors.black,
   },
-  bottomBar: {
-    position: 'absolute', bottom: 60, left: 0, right: 0,
+  camera: {
+    flex: 1,
+  },
+  topControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  captureBtn: {
-    width: 76, height: 76, borderRadius: 38,
-    borderWidth: 4, borderColor: '#FFF',
-    alignItems: 'center', justifyContent: 'center',
+  controlText: {
+    color: colors.white,
+    fontSize: 20,
   },
-  captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#FFF' },
+  pageCounter: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    marginTop: spacing.lg,
+  },
+  pageCounterText: {
+    color: colors.white,
+    fontWeight: '600',
+  },
+  bottomControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  autoButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  autoButtonActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  autoButtonText: {
+    color: colors.white,
+    fontWeight: '600',
+  },
+  autoButtonTextActive: {
+    color: colors.white,
+  },
+  captureButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  captureButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.primary,
+  },
+  reviewButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  reviewButtonText: {
+    color: colors.white,
+    fontWeight: '600',
+  },
+  black: {
+    color: colors.neutrals[900],
+  },
 });
