@@ -1,29 +1,40 @@
-import React from 'react';
 import { Tabs } from 'expo-router';
-import { Icon, IconName } from '@/components/ui/Icon';
 import { colors } from '@/constants/theme';
 
 export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerShown: false,
+        headerShown: true,
         tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textTertiary,
+        tabBarInactiveTintColor: colors.neutrals[400],
+        tabBarStyle: {
+          backgroundColor: colors.white,
+          borderTopColor: colors.neutrals[200],
+        },
       }}
     >
-      <Tabs.Screen name="index" options={{
-        title: 'Accueil',
-        tabBarIcon: ({ color, size }) => <Icon name="grid" color={color} size={size ?? 24} />,
-      }} />
-      <Tabs.Screen name="files" options={{
-        title: 'Fichiers',
-        tabBarIcon: ({ color, size }) => <Icon name="folder" color={color} size={size ?? 24} />,
-      }} />
-      <Tabs.Screen name="settings" options={{
-        title: 'Réglages',
-        tabBarIcon: ({ color, size }) => <Icon name="dots" color={color} size={size ?? 24} />,
-      }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Accueil',
+          headerTitle: 'Scana',
+        }}
+      />
+      <Tabs.Screen
+        name="files"
+        options={{
+          title: 'Documents',
+          headerTitle: 'Mes Documents',
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Paramètres',
+          headerTitle: 'Paramètres',
+        }}
+      />
     </Tabs>
   );
 }
