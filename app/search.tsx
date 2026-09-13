@@ -1,72 +1,85 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, FlatList } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, spacing, typography, radius } from '@/constants/theme';
-import { Icon } from '@/components/ui/Icon';
-import { Input } from '@/components/ui/Input';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { searchService } from '@/search/searchService';
+import { Input, Text, Card } from '@/components/atoms';
+import { useDocuments } from '@/hooks/useDocuments';
+import { colors, spacing } from '@/constants/theme';
 
 export default function SearchScreen() {
-  const [query, setQuery] = useState('');
   const router = useRouter();
-  const results = useMemo(() => searchService.query(query), [query]);
+  const { documents } = useDocuments();
+  const [searchText, setSearchText] = useState('');
+
+  const filteredDocuments = documents.filter((doc) =>
+    doc.title.toLowerCase().includes(searchText.toLowerCase())
+  );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Retour">
-          <Icon name="arrowLeft" size={24} color={colors.text} />
-        </Pressable>
-        <View style={{ flex: 1 }}>
-          <Input value={query} onChangeText={setQuery} placeholder="Titre, texte, tag, dossier…"
-            autoFocus accessibilityLabel="Recherche" />
-        </View>
+    <View style={styles.container}>
+      <View style={styles.searchContainer}>
+        <Input
+          placeholder="Rechercher des documents..."
+          value={searchText}
+          onChangeText={setSearchText}
+        />
       </View>
 
-      <FlatList
-        data={results}
-        keyExtractor={(r) => `${r.documentId}-${r.matchField}`}
-        contentContainerStyle={{ padding: spacing.lg, flexGrow: 1 }}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => (
-          <Pressable style={styles.result} onPress={() => router.push(`/document/${item.documentId}`)}
-            accessibilityLabel={item.title}>
-            <Icon name={item.matchField === 'title' ? 'page' : item.matchField === 'ocr' ? 'text'
-              : item.matchField === 'tag' ? 'filter' : 'folder'}
-              size={18} color={colors.textTertiary} />
-            <View style={{ flex: 1 }}>
-              <Text style={[typography.body, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
-              {item.snippet ? (
-                <Text style={[typography.bodySmall, { color: colors.textSecondary }]} numberOfLines={2}>
-                  {item.snippet}
-                </Text>
-              ) : null}
-            </View>
-          </Pressable>
-        )}
-        ListEmptyComponent={
-          query.length >= 2
-            ? <EmptyState icon="search" title="Aucun résultat"
-                message={`Rien trouvé pour « ${query} ». L’OCR indexe les documents en arrière-plan.`} />
-            : <EmptyState icon="search" title="Recherche locale"
-                message="Recherchez dans les titres, le texte extrait (OCR), les tags et les dossiers." />
-        }
-      />
-    </SafeAreaView>
+      {searchText.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text variant="body" color={colors.neutrals[500]}>
+            Entrez un terme de recherche
+          </Text>
+        </View>
+      ) : filteredDocuments.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text variant="body" color={colors.neutrals[500]}>
+            Aucun résultat trouvé
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredDocuments}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <Card
+              style={styles.resultCard}
+              onPress={() => router.push(`/document/${item.id}`)}
+            >
+              <Text variant="h3" numberOfLines={1}>
+                {item.title}
+              </Text>
+              <Text variant="caption" color={colors.neutrals[500]}>
+                {item.pageCount} pages
+              </Text>
+            </Card>
+          )}
+          contentContainerStyle={styles.resultsList}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+  container: {
+    flex: 1,
+    backgroundColor: colors.neutrals[50],
   },
-  result: {
-    flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start',
-    backgroundColor: colors.background, borderRadius: radius.md,
-    padding: spacing.md, marginBottom: spacing.sm,
+  searchContainer: {
+    padding: spacing.lg,
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.neutrals[200],
+  },
+  resultsList: {
+    padding: spacing.lg,
+  },
+  resultCard: {
+    marginBottom: spacing.md,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
